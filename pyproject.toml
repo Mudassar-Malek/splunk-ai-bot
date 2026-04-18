@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "splunk-ai-bot"
+version = "0.1.0"
+description = "AI-powered Splunk assistant for incident investigation — CLI and MCP server"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "requests>=2.31.0",
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+splunk-bot = "src.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
