@@ -1,6 +1,5 @@
 """Unit tests for SplunkClient — all HTTP calls are mocked."""
 
-import json
 import pytest
 import responses
 

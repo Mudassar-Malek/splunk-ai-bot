@@ -4,7 +4,6 @@ Splunk REST API client — wraps search job lifecycle and result pagination.
 
 import time
 import requests
-from typing import Any
 from urllib.parse import urljoin
 
 

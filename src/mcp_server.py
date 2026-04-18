@@ -8,7 +8,6 @@ Start:    python -m src.mcp_server
 
 import json
 import os
-import sys
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
