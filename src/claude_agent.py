@@ -1,17 +1,23 @@
 """
-Claude-powered agent that translates natural language questions into SPL,
-executes them, and synthesises the results into human-readable answers.
+Claude-powered agent: natural language → SPL → execute → synthesise results.
+All configurable values come from config.yaml or environment variables.
 """
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import anthropic
+import yaml
 
 from .splunk_client import SplunkClient
 
-SYSTEM_PROMPT = """You are SplunkBot, an expert Splunk Power User and incident responder embedded in a fintech SRE team.
+# Load config — allows non-secret settings to be changed without code edits
+_config_path = Path(__file__).parent.parent / "config.yaml"
+_config: dict = yaml.safe_load(_config_path.read_text()) if _config_path.exists() else {}
+
+SYSTEM_PROMPT = """You are SplunkBot, an expert Splunk Power User and incident responder.
 
 Your responsibilities:
 1. Translate natural-language questions into correct, efficient SPL queries.
@@ -19,42 +25,41 @@ Your responsibilities:
 3. Identify anomalies, error spikes, and potential root causes from log data.
 4. Suggest follow-up searches when the first result is inconclusive.
 
-SPL Guidelines you must follow:
+SPL Guidelines:
 - Always scope searches with `index=` and a time range.
 - Prefer `stats count by` over raw event dumps for large result sets.
-- Use `eval` and `rex` for field extraction when needed.
 - Never use wildcard-only searches (`index=* sourcetype=*`) — they are expensive.
 - Add `| head 100` as a safety limit when result size is unknown.
 
-When returning a query, wrap it in a ```spl code block.
-When summarising results, lead with the key finding in one sentence, then detail.
+When returning a query wrap it in a ```spl code block.
+Lead every answer with the key finding in one sentence.
 """
 
 TOOLS = [
     {
         "name": "run_splunk_search",
-        "description": "Execute an SPL query against Splunk and return raw results as a JSON array.",
+        "description": "Execute an SPL query against Splunk and return raw results as JSON.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "spl_query": {
                     "type": "string",
-                    "description": "A valid SPL search string (without leading 'search' keyword).",
+                    "description": "Valid SPL search string (without leading 'search' keyword).",
                 },
                 "earliest": {
                     "type": "string",
-                    "description": "Splunk time modifier for start of window, e.g. '-1h', '-24h@d'.",
-                    "default": "-15m",
+                    "description": "Splunk time modifier for start of window e.g. '-1h', '-24h@d'.",
+                    "default": _config.get("default_time_window", {}).get("earliest", "-15m"),
                 },
                 "latest": {
                     "type": "string",
                     "description": "Splunk time modifier for end of window.",
-                    "default": "now",
+                    "default": _config.get("default_time_window", {}).get("latest", "now"),
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum number of events to return.",
-                    "default": 500,
+                    "description": "Maximum events to return.",
+                    "default": _config.get("max_results", 500),
                 },
             },
             "required": ["spl_query"],
@@ -62,22 +67,23 @@ TOOLS = [
     },
     {
         "name": "list_indexes",
-        "description": "Return the list of available Splunk indexes so the agent can pick the right one.",
+        "description": "Return available Splunk indexes so the agent can pick the right one.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "list_saved_searches",
-        "description": "Return saved Splunk searches (alerts and reports) that may be relevant to the user's question.",
+        "description": "Return saved Splunk searches (alerts/reports) relevant to the question.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]
 
 
 class SplunkAIAgent:
-    def __init__(self, splunk_client: SplunkClient, model: str = "claude-sonnet-4-6"):
+    def __init__(self, splunk_client: SplunkClient, model: str | None = None):
         self.splunk = splunk_client
         self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        self.model = model
+        self.model = model or _config.get("claude_model", "claude-sonnet-4-6")
+        self.max_tokens = _config.get("max_tokens", 4096)
         self.conversation: list[dict] = []
 
     def chat(self, user_message: str) -> str:
@@ -88,48 +94,47 @@ class SplunkAIAgent:
         while True:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=self.max_tokens,
                 system=SYSTEM_PROMPT,
                 tools=TOOLS,
                 messages=self.conversation,
             )
 
-            # Collect any text content first
-            assistant_text = ""
+            text = ""
             tool_uses = []
             for block in response.content:
                 if block.type == "text":
-                    assistant_text = block.text
+                    text = block.text
                 elif block.type == "tool_use":
                     tool_uses.append(block)
 
             self.conversation.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn" or not tool_uses:
-                return assistant_text
+                return text
 
-            # Execute tools and feed results back
             tool_results = []
-            for tool_use in tool_uses:
-                result = self._dispatch_tool(tool_use.name, tool_use.input)
+            for tu in tool_uses:
+                result = self._dispatch_tool(tu.name, tu.input)
                 tool_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tool_use.id,
+                    "tool_use_id": tu.id,
                     "content": json.dumps(result, default=str),
                 })
-
             self.conversation.append({"role": "user", "content": tool_results})
 
     def _dispatch_tool(self, name: str, inputs: dict) -> Any:
+        defaults = _config.get("default_time_window", {})
         if name == "run_splunk_search":
             return self.splunk.run_search(
                 spl_query=inputs["spl_query"],
-                earliest=inputs.get("earliest", "-15m"),
-                latest=inputs.get("latest", "now"),
-                max_results=inputs.get("max_results", 500),
+                earliest=inputs.get("earliest", defaults.get("earliest", "-15m")),
+                latest=inputs.get("latest", defaults.get("latest", "now")),
+                max_results=inputs.get("max_results", _config.get("max_results", 500)),
             )
         if name == "list_indexes":
-            return self.splunk.get_indexes()
+            excluded = set(_config.get("excluded_indexes", []))
+            return [i for i in self.splunk.get_indexes() if i not in excluded]
         if name == "list_saved_searches":
             return self.splunk.get_saved_searches()
         raise ValueError(f"Unknown tool: {name}")

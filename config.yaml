@@ -1,0 +1,29 @@
+# ============================================================
+# SplunkBot Configuration
+# Copy .env.example to .env and fill in secrets.
+# Non-secret settings can be changed here.
+# ============================================================
+
+# Claude model to use — change to claude-opus-4-7 for higher quality,
+# claude-haiku-4-5-20251001 for lower cost/latency
+claude_model: "claude-sonnet-4-6"
+
+# Max tokens for Claude responses
+max_tokens: 4096
+
+# Default Splunk search window if user doesn't specify a time range
+default_time_window:
+  earliest: "-15m"
+  latest: "now"
+
+# Maximum events returned per search (guards against huge result sets)
+max_results: 500
+
+# Splunk search timeout in seconds
+search_timeout_seconds: 120
+
+# Indexes to exclude from auto-suggestions (internal/noisy indexes)
+excluded_indexes:
+  - "_internal"
+  - "_audit"
+  - "history"
